@@ -9,9 +9,9 @@ use objc2_user_notifications::{
     UNAuthorizationOptions, UNMutableNotificationContent, UNNotification, UNNotificationAction,
     UNNotificationActionOptions, UNNotificationCategory, UNNotificationCategoryOptions,
     UNNotificationPresentationOptions, UNNotificationRequest, UNNotificationResponse,
-    UNUserNotificationCenter, UNUserNotificationCenterDelegate,
+    UNNotificationSound, UNUserNotificationCenter, UNUserNotificationCenterDelegate,
 };
-use std::sync::{LazyLock, Once};
+use std::sync::{LazyLock, Mutex, Once};
 
 const NEEDS_SIGN: &str = "Note that the application must be code-signed \
                           for UNUserNotificationCenter to work";
@@ -96,6 +96,68 @@ impl Drop for NotifDelegate {
 const CENTER: LazyLock<Retained<UNUserNotificationCenter>> =
     LazyLock::new(|| unsafe { UNUserNotificationCenter::currentNotificationCenter() });
 
+struct NotifRecord {
+    uuid: String,
+    pane_id: usize,
+    tab_id: usize,
+    window_id: usize,
+}
+
+/// (pane_id, tab_id, window_id) — set before calling show_notif, consumed inside
+static PENDING_CONTEXT: Mutex<Option<(usize, usize, usize)>> = Mutex::new(None);
+static NOTIF_RECORDS: Mutex<Vec<NotifRecord>> = Mutex::new(Vec::new());
+
+/// Set the pane/tab/window context for the next notification.
+/// Must be called immediately before `show_notif`.
+pub fn set_notification_context(pane_id: usize, tab_id: usize, window_id: usize) {
+    *PENDING_CONTEXT.lock().unwrap() = Some((pane_id, tab_id, window_id));
+}
+
+fn remove_delivered(uuids: Vec<String>) {
+    if uuids.is_empty() {
+        return;
+    }
+    let ns_ids: Vec<Retained<NSString>> = uuids.iter().map(|s| NSString::from_str(s)).collect();
+    let refs: Vec<&NSString> = ns_ids.iter().map(|s| &**s).collect();
+    let array = NSArray::from_slice(&refs);
+    CENTER.removeDeliveredNotificationsWithIdentifiers(&array);
+}
+
+pub fn dismiss_for_pane(pane_id: usize) {
+    let mut records = NOTIF_RECORDS.lock().unwrap();
+    let (to_remove, remaining): (Vec<_>, Vec<_>) =
+        records.drain(..).partition(|r| r.pane_id == pane_id);
+    *records = remaining;
+    let uuids: Vec<String> = to_remove.into_iter().map(|r| r.uuid).collect();
+    drop(records);
+    remove_delivered(uuids);
+}
+
+pub fn dismiss_for_tab(tab_id: usize) {
+    let mut records = NOTIF_RECORDS.lock().unwrap();
+    let (to_remove, remaining): (Vec<_>, Vec<_>) =
+        records.drain(..).partition(|r| r.tab_id == tab_id);
+    *records = remaining;
+    let uuids: Vec<String> = to_remove.into_iter().map(|r| r.uuid).collect();
+    drop(records);
+    remove_delivered(uuids);
+}
+
+pub fn dismiss_for_window(window_id: usize) {
+    let mut records = NOTIF_RECORDS.lock().unwrap();
+    let (to_remove, remaining): (Vec<_>, Vec<_>) =
+        records.drain(..).partition(|r| r.window_id == window_id);
+    *records = remaining;
+    let uuids: Vec<String> = to_remove.into_iter().map(|r| r.uuid).collect();
+    drop(records);
+    remove_delivered(uuids);
+}
+
+pub fn dismiss_all() {
+    NOTIF_RECORDS.lock().unwrap().clear();
+    CENTER.removeAllDeliveredNotifications();
+}
+
 pub fn initialize() {
     static INIT: Once = Once::new();
     INIT.call_once(|| unsafe {
@@ -155,6 +217,9 @@ pub fn show_notif(toast: ToastNotification) -> Result<(), Box<dyn std::error::Er
         let notif = UNMutableNotificationContent::new();
         notif.setTitle(&NSString::from_str(&toast.title));
         notif.setBody(&NSString::from_str(&toast.message));
+        if toast.sound {
+            notif.setSound(Some(&UNNotificationSound::defaultSound()));
+        }
 
         if let Some(url) = &toast.url {
             let info =
@@ -167,6 +232,18 @@ pub fn show_notif(toast: ToastNotification) -> Result<(), Box<dyn std::error::Er
         }
 
         let identifier = uuid::Uuid::new_v4().to_string();
+
+        // Record pane/tab/window context if set by caller
+        let ctx = PENDING_CONTEXT.lock().unwrap().take();
+        if let Some((pane_id, tab_id, window_id)) = ctx {
+            NOTIF_RECORDS.lock().unwrap().push(NotifRecord {
+                uuid: identifier.clone(),
+                pane_id,
+                tab_id,
+                window_id,
+            });
+        }
+
         let request = UNNotificationRequest::requestWithIdentifier_content_trigger(
             &NSString::from_str(&identifier),
             &*notif,
@@ -178,15 +255,14 @@ pub fn show_notif(toast: ToastNotification) -> Result<(), Box<dyn std::error::Er
             Some(&RcBlock::new(move |err: *mut NSError| {
                 if err.is_null() {
                     if let Some(timeout) = toast.timeout {
-                        // Spawn a thread to wait. This could be more efficient.
-                        // We cannot simply use performSelector:withObject:afterDelay:
-                        // because we're not guaranteed to be called from the main
-                        // thread.  We also don't have access to the executor machinery
-                        // from the window crate here, so we just do this basic take.
                         let identifier = identifier.clone();
                         std::thread::spawn(move || {
                             std::thread::sleep(timeout);
-                            // Remove this notification
+                            // Remove from records
+                            NOTIF_RECORDS
+                                .lock()
+                                .unwrap()
+                                .retain(|r| r.uuid != identifier);
                             let ident_array =
                                 NSArray::from_retained_slice(&[NSString::from_str(&identifier)]);
                             CENTER.removeDeliveredNotificationsWithIdentifiers(&ident_array);

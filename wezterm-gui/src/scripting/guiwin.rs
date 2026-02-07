@@ -83,12 +83,13 @@ impl UserData for GuiWin {
         });
         methods.add_method(
             "toast_notification",
-            |_, _, (title, message, url, timeout): (String, String, Option<String>, Option<u64>)| {
+            |_, _, (title, message, url, timeout, sound): (String, String, Option<String>, Option<u64>, Option<bool>)| {
                 wezterm_toast_notification::show(ToastNotification {
                     title,
                     message,
                     url,
-                    timeout: timeout.map(std::time::Duration::from_millis)
+                    timeout: timeout.map(std::time::Duration::from_millis),
+                    sound: sound.unwrap_or(false),
                 });
                 Ok(())
             },

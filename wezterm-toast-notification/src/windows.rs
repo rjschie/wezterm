@@ -31,6 +31,12 @@ fn show_notif_impl(toast: TN) -> Result<(), Box<dyn std::error::Error>> {
         ""
     };
 
+    let audio = if !toast.sound {
+        r#"<audio silent="true"/>"#
+    } else {
+        ""
+    };
+
     xml.LoadXml(HSTRING::from(format!(
         r#"<toast duration="long">
         <visual>
@@ -40,10 +46,12 @@ fn show_notif_impl(toast: TN) -> Result<(), Box<dyn std::error::Error>> {
             </binding>
         </visual>
         {}
+        {}
     </toast>"#,
         escape_str_pcdata(&toast.title),
         escape_str_pcdata(&toast.message),
-        url_actions
+        url_actions,
+        audio
     )))?;
 
     let notif = ToastNotification::CreateToastNotification(xml)?;

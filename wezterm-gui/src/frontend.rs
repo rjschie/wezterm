@@ -85,6 +85,20 @@ impl GuiFrontEnd {
                         }
                     })
                     .detach();
+
+                    #[cfg(target_os = "macos")]
+                    {
+                        let config = config::configuration();
+                        match config.notification_handling {
+                            NotificationHandling::AlwaysShow => {
+                                wezterm_toast_notification::macos_dismiss_all();
+                            }
+                            NotificationHandling::SuppressFromFocusedPane => {
+                                wezterm_toast_notification::macos_dismiss_for_pane(pane_id);
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 MuxNotification::TabTitleChanged { .. } => {}
                 MuxNotification::WindowTitleChanged { .. } => {}
@@ -127,6 +141,10 @@ impl GuiFrontEnd {
                                 // FIXME: if notification.focus is true, we should do
                                 // something here to arrange to focus pane_id when the
                                 // notification is clicked
+                                #[cfg(target_os = "macos")]
+                                wezterm_toast_notification::macos_set_notification_context(
+                                    pane_id, tab_id, window_id,
+                                );
                                 persistent_toast_notification(title, message);
                             }
                         }
