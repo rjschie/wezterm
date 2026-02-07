@@ -658,6 +658,7 @@ impl Window {
                 },
                 window_state: WindowState::default(),
                 live_resizing: false,
+                window_position: None,
             });
 
             Ok(window_handle)
@@ -2979,6 +2980,15 @@ impl WindowView {
                 .unwrap_or(crate::DEFAULT_DPI * (backing_frame.size.width / frame.size.width))
                 as usize;
 
+            let window_position = inner.window.as_ref().map(|window| {
+                let window = window.load();
+                let window_frame = unsafe { NSWindow::frame(*window) };
+                cartesian_to_screen_point(NSPoint::new(
+                    window_frame.origin.x,
+                    window_frame.origin.y + window_frame.size.height,
+                ))
+            });
+
             inner.events.dispatch(WindowEvent::Resized {
                 dimensions: Dimensions {
                     pixel_width: width as usize,
@@ -2987,6 +2997,7 @@ impl WindowView {
                 },
                 window_state: screen_state | level_state,
                 live_resizing,
+                window_position,
             });
         }
     }
@@ -3269,6 +3280,10 @@ impl WindowView {
             );
             cls.add_method(
                 sel!(windowDidResize:),
+                Self::did_resize as extern "C" fn(&mut Object, Sel, id),
+            );
+            cls.add_method(
+                sel!(windowDidMove:),
                 Self::did_resize as extern "C" fn(&mut Object, Sel, id),
             );
             cls.add_method(

@@ -910,6 +910,7 @@ impl WaylandWindowInner {
                         // We don't know if we're live resizing or not, so
                         // assume no.
                         live_resizing: false,
+                        window_position: None,
                     });
                     // Avoid blurring by matching the scaling factor of the
                     // compositor; if it is going to double the size then

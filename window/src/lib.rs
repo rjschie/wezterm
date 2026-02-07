@@ -19,9 +19,9 @@ mod spawn;
 pub use raw_window_handle;
 
 #[cfg(target_os = "macos")]
-pub(crate) const DEFAULT_DPI: f64 = 72.0;
+pub const DEFAULT_DPI: f64 = 72.0;
 #[cfg(not(target_os = "macos"))]
-pub(crate) const DEFAULT_DPI: f64 = 96.0;
+pub const DEFAULT_DPI: f64 = 96.0;
 
 pub fn default_dpi() -> f64 {
     match Connection::get() {
@@ -165,11 +165,13 @@ pub enum WindowEvent {
     /// Called when the window is being destroyed by the window system
     Destroyed,
 
-    /// Called when the window has been resized
+    /// Called when the window has been resized or moved
     Resized {
         dimensions: Dimensions,
         window_state: WindowState,
         live_resizing: bool,
+        /// Screen-space position of the window origin, if available
+        window_position: Option<ScreenPoint>,
     },
 
     /// Called when a program-requested set_inner_size() has finished

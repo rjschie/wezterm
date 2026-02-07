@@ -1,4 +1,5 @@
 use super::confirm;
+use crate::termwindow::state;
 use crate::TermWindow;
 use mux::pane::PaneId;
 use mux::tab::TabId;
@@ -60,6 +61,7 @@ pub fn confirm_close_window(
         &mut term,
     )? {
         promise::spawn::spawn_into_main_thread(async move {
+            state::save_all_windows_state();
             let mux = Mux::get();
             mux.kill_window(mux_window_id);
         })
@@ -77,6 +79,7 @@ pub fn confirm_quit_program(
 ) -> anyhow::Result<()> {
     if confirm::run_confirmation("🛑 Really Quit WezTerm?", &mut term)? {
         promise::spawn::spawn_into_main_thread(async move {
+            state::save_all_windows_state();
             use ::window::{Connection, ConnectionOps};
             let con = Connection::get().expect("call on gui thread");
             con.terminate_message_loop();

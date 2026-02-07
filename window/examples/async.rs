@@ -37,6 +37,7 @@ impl MyWindow {
                 dimensions,
                 window_state,
                 live_resizing,
+                window_position: _,
             } => {
                 eprintln!(
                     "resize {:?} live={} state={:?}",

@@ -396,6 +396,235 @@ async fn trigger_and_log_gui_attached(domain: MuxDomain) {
     }
 }
 
+async fn restore_saved_state() -> anyhow::Result<bool> {
+    use crate::termwindow::state::SavedPaneNode;
+
+    let config = config::configuration();
+    if !config.remember_window_state {
+        return Ok(false);
+    }
+
+    let saved = match crate::termwindow::state::load_state() {
+        Some(s) if !s.windows.is_empty() => s,
+        _ => return Ok(false),
+    };
+
+    // Check that at least one window has tabs
+    if !saved.windows.iter().any(|w| !w.tabs.is_empty()) {
+        return Ok(false);
+    }
+
+    let mux = Mux::get();
+    let domain = mux.default_domain();
+    let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi());
+    let (cell_width, cell_height) = cell_pixel_dims(&config, dpi)?;
+
+    for saved_win in &saved.windows {
+        if saved_win.tabs.is_empty() {
+            continue;
+        }
+
+        // Compute terminal size from saved geometry so splits happen at the
+        // correct proportions. The resize algorithm distributes extra cells
+        // round-robin, which destroys ratios when growing from a small
+        // default size to the actual window size.
+        let terminal_size = match (saved_win.geometry.width, saved_win.geometry.height) {
+            (Some(sw), Some(sh)) if sw > 0 && sh > 0 => {
+                let base_dpi = ::window::DEFAULT_DPI;
+                let actual_w = (sw as f64 * dpi / base_dpi) as usize;
+                let actual_h = (sh as f64 * dpi / base_dpi) as usize;
+                let cols = (actual_w / cell_width).max(1);
+                let rows = (actual_h / cell_height).max(1);
+                wezterm_term::TerminalSize {
+                    rows,
+                    cols,
+                    pixel_width: cols * cell_width,
+                    pixel_height: rows * cell_height,
+                    dpi: dpi as u32,
+                }
+            }
+            _ => config.initial_size(dpi as u32, Some((cell_width, cell_height))),
+        };
+
+        let workspace = Some(saved_win.workspace.clone());
+        let position = None;
+        let window_id = {
+            let builder = mux.new_empty_window(workspace, position);
+            *builder
+        };
+
+        domain.attach(Some(window_id)).await?;
+
+        let mut active_tab_idx = None;
+
+        for (tab_idx, saved_tab) in saved_win.tabs.iter().enumerate() {
+            if saved_tab.is_active {
+                active_tab_idx = Some(tab_idx);
+            }
+
+            // Get root working dir from leftmost leaf
+            let root_dir = find_first_working_dir(&saved_tab.pane_tree);
+
+            let tab = domain
+                .spawn(
+                    terminal_size,
+                    None,
+                    root_dir.clone(),
+                    window_id,
+                )
+                .await?;
+
+            let tab_id = tab.tab_id();
+
+            // Now walk the pane tree to create splits and find active pane
+            let active_pane_id = if let SavedPaneNode::Split { .. } = &saved_tab.pane_tree {
+                if let Some(root_pane) = tab.get_active_pane() {
+                    let root_pane_id = root_pane.pane_id();
+                    restore_pane_splits(
+                        &domain,
+                        tab_id,
+                        root_pane_id,
+                        &saved_tab.pane_tree,
+                        &config,
+                        dpi,
+                    )
+                    .await?
+                } else {
+                    None
+                }
+            } else if let SavedPaneNode::Leaf { is_active: true, .. } = &saved_tab.pane_tree {
+                tab.get_active_pane().map(|p| p.pane_id())
+            } else {
+                None
+            };
+
+            // Restore active pane, then zoom (order matters: zoom applies to active pane)
+            if let Some(active_id) = active_pane_id {
+                let mux = Mux::get();
+                if let Some(pane) = mux.get_pane(active_id) {
+                    tab.set_active_pane(&pane);
+                }
+            }
+            if !saved_tab.title.is_empty() {
+                tab.set_title(&saved_tab.title);
+            }
+            if saved_tab.is_zoomed {
+                tab.set_zoomed(true);
+            }
+        }
+
+        if let Some(idx) = active_tab_idx {
+            if let Some(mut window) = mux.get_window_mut(window_id) {
+                if idx < window.len() {
+                    window.save_and_then_set_active(idx);
+                }
+            }
+        }
+    }
+
+    Ok(true)
+}
+
+fn find_first_working_dir(
+    node: &crate::termwindow::state::SavedPaneNode,
+) -> Option<String> {
+    use crate::termwindow::state::SavedPaneNode;
+    match node {
+        SavedPaneNode::Leaf {
+            working_directory, ..
+        } => working_directory.clone(),
+        SavedPaneNode::Split { first, second, .. } => find_first_working_dir(first)
+            .or_else(|| second.as_ref().and_then(|s| find_first_working_dir(s))),
+    }
+}
+
+async fn restore_pane_splits(
+    domain: &Arc<dyn Domain>,
+    tab_id: mux::tab::TabId,
+    pane_id: mux::pane::PaneId,
+    node: &crate::termwindow::state::SavedPaneNode,
+    config: &ConfigHandle,
+    dpi: f64,
+) -> anyhow::Result<Option<mux::pane::PaneId>> {
+    use crate::termwindow::state::SavedPaneNode;
+    use mux::domain::SplitSource;
+    use mux::tab::{SplitDirection, SplitRequest, SplitSize};
+
+    match node {
+        SavedPaneNode::Split {
+            direction,
+            sizes,
+            first,
+            second,
+        } => {
+            let active;
+
+            if let Some(second_node) = second {
+                let second_dir = find_first_working_dir(second_node);
+
+                let mux = Mux::get();
+                let pane = mux
+                    .get_pane(pane_id)
+                    .ok_or_else(|| anyhow::anyhow!("pane {pane_id} not found"))?;
+                let pane_dims = pane.get_dimensions();
+                let dim = match direction {
+                    SplitDirection::Horizontal => pane_dims.cols,
+                    SplitDirection::Vertical => pane_dims.viewport_rows,
+                };
+                let second_cells =
+                    (sizes[1] / 100.0 * dim as f64).round() as usize;
+
+                let new_pane = domain
+                    .split_pane(
+                        SplitSource::Spawn {
+                            command: None,
+                            command_dir: second_dir,
+                        },
+                        tab_id,
+                        pane_id,
+                        SplitRequest {
+                            direction: *direction,
+                            target_is_second: true,
+                            top_level: false,
+                            size: SplitSize::Cells(second_cells),
+                        },
+                    )
+                    .await?;
+
+                let first_active = Box::pin(restore_pane_splits(
+                    domain, tab_id, pane_id, first, config, dpi,
+                ))
+                .await?;
+                let second_active = Box::pin(restore_pane_splits(
+                    domain,
+                    tab_id,
+                    new_pane.pane_id(),
+                    second_node,
+                    config,
+                    dpi,
+                ))
+                .await?;
+                active = first_active.or(second_active);
+            } else {
+                let first_active = Box::pin(restore_pane_splits(
+                    domain, tab_id, pane_id, first, config, dpi,
+                ))
+                .await?;
+                active = first_active;
+            }
+
+            Ok(active)
+        }
+        SavedPaneNode::Leaf { is_active, .. } => {
+            if *is_active {
+                Ok(Some(pane_id))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+}
+
 fn cell_pixel_dims(config: &ConfigHandle, dpi: f64) -> anyhow::Result<(usize, usize)> {
     let fontconfig = Rc::new(FontConfiguration::new(Some(config.clone()), dpi as usize)?);
     let render_metrics = RenderMetrics::new(&fontconfig)?;
@@ -489,6 +718,27 @@ async fn async_run_terminal_gui(
             trigger_and_log_gui_attached(MuxDomain(domain.domain_id())).await;
         }
     }
+    // Try to restore saved state if configured
+    if !is_connecting && opts.domain.is_none() {
+        match restore_saved_state().await {
+            Ok(true) => {
+                // State restored, spawn_tab_in_domain_if_mux_is_empty will
+                // naturally skip since mux has panes
+                return spawn_tab_in_domain_if_mux_is_empty(
+                    cmd,
+                    is_connecting,
+                    domain,
+                    opts.workspace,
+                )
+                .await;
+            }
+            Ok(false) => {}
+            Err(err) => {
+                log::warn!("Failed to restore saved state: {err:#}");
+            }
+        }
+    }
+
     spawn_tab_in_domain_if_mux_is_empty(cmd, is_connecting, domain, opts.workspace).await
 }
 

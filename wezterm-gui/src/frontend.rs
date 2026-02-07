@@ -66,10 +66,19 @@ impl GuiFrontEnd {
                     }
                 }
                 MuxNotification::WindowWorkspaceChanged(_)
-                | MuxNotification::ActiveWorkspaceChanged(_)
-                | MuxNotification::WindowCreated(_)
+                | MuxNotification::ActiveWorkspaceChanged(_) => {
+                    promise::spawn::spawn_into_main_thread(async move {
+                        let fe = crate::frontend::front_end();
+                        if !fe.is_switching_workspace() {
+                            fe.reconcile_workspace();
+                        }
+                    })
+                    .detach();
+                }
+                MuxNotification::WindowCreated(_)
                 | MuxNotification::WindowRemoved(_) => {
                     promise::spawn::spawn_into_main_thread(async move {
+                        crate::termwindow::state::save_all_windows_state();
                         let fe = crate::frontend::front_end();
                         if !fe.is_switching_workspace() {
                             fe.reconcile_workspace();
@@ -86,14 +95,19 @@ impl GuiFrontEnd {
                     })
                     .detach();
                 }
-                MuxNotification::TabTitleChanged { .. } => {}
                 MuxNotification::WindowTitleChanged { .. } => {}
                 MuxNotification::TabResized(_) => {}
-                MuxNotification::TabAddedToWindow { .. } => {}
-                MuxNotification::PaneRemoved(_) => {}
+                MuxNotification::TabAddedToWindow { .. }
+                | MuxNotification::TabTitleChanged { .. }
+                | MuxNotification::PaneAdded(_)
+                | MuxNotification::PaneRemoved(_) => {
+                    promise::spawn::spawn_into_main_thread(async move {
+                        crate::termwindow::state::save_all_windows_state();
+                    })
+                    .detach();
+                }
                 MuxNotification::WindowInvalidated(_) => {}
                 MuxNotification::PaneOutput(_) => {}
-                MuxNotification::PaneAdded(_) => {}
                 MuxNotification::Alert {
                     pane_id,
                     alert:
