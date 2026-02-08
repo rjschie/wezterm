@@ -515,57 +515,6 @@ fn default_active_tab() -> TabBarColor {
 }
 
 #[derive(Debug, Clone, FromDynamic, ToDynamic)]
-pub struct TabBarStyle {
-    #[dynamic(default = "default_new_tab")]
-    pub new_tab: String,
-    #[dynamic(default = "default_new_tab")]
-    pub new_tab_hover: String,
-    #[dynamic(default = "default_window_hide")]
-    pub window_hide: String,
-    #[dynamic(default = "default_window_hide")]
-    pub window_hide_hover: String,
-    #[dynamic(default = "default_window_maximize")]
-    pub window_maximize: String,
-    #[dynamic(default = "default_window_maximize")]
-    pub window_maximize_hover: String,
-    #[dynamic(default = "default_window_close")]
-    pub window_close: String,
-    #[dynamic(default = "default_window_close")]
-    pub window_close_hover: String,
-}
-
-impl Default for TabBarStyle {
-    fn default() -> Self {
-        Self {
-            new_tab: default_new_tab(),
-            new_tab_hover: default_new_tab(),
-            window_hide: default_window_hide(),
-            window_hide_hover: default_window_hide(),
-            window_maximize: default_window_maximize(),
-            window_maximize_hover: default_window_maximize(),
-            window_close: default_window_close(),
-            window_close_hover: default_window_close(),
-        }
-    }
-}
-
-fn default_new_tab() -> String {
-    " + ".to_string()
-}
-
-fn default_window_hide() -> String {
-    " . ".to_string()
-}
-
-fn default_window_maximize() -> String {
-    " - ".to_string()
-}
-
-fn default_window_close() -> String {
-    " X ".to_string()
-}
-
-#[derive(Debug, Clone, FromDynamic, ToDynamic)]
 pub struct WindowFrameConfig {
     #[dynamic(default = "default_inactive_titlebar_bg")]
     pub inactive_titlebar_bg: RgbaColor,

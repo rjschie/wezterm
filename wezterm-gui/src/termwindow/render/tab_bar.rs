@@ -1,4 +1,5 @@
 use crate::quad::TripleLayerQuadAllocator;
+use crate::termwindow::render::fancy_tab_bar::scale_pixel_dim;
 use crate::termwindow::render::RenderScreenLineParams;
 use crate::utilsprites::RenderMetrics;
 use config::ConfigHandle;
@@ -104,16 +105,81 @@ impl crate::TermWindow {
         config: &ConfigHandle,
         fontconfig: &wezterm_font::FontConfiguration,
         render_metrics: &RenderMetrics,
+        dpi: usize,
     ) -> anyhow::Result<f32> {
         if config.use_fancy_tab_bar {
             let font = fontconfig.title_font()?;
-            Ok((font.metrics().cell_height.get() as f32 * 1.75).ceil())
+            let cell_height = font.metrics().cell_height.get() as f32;
+            let scale = dpi as f32 / ::window::DEFAULT_DPI as f32;
+
+            if let Some(fancy) = config.fancy_bar.as_ref() {
+                let ctx = config::DimensionContext {
+                    dpi: dpi as f32,
+                    pixel_max: cell_height * 2.0,
+                    pixel_cell: cell_height,
+                };
+
+                // Container padding
+                let pad = fancy.padding.as_ref();
+                let ct = scale_pixel_dim(
+                    pad.and_then(|p| p.top)
+                        .unwrap_or(config::Dimension::Pixels(0.)),
+                    scale,
+                )
+                .evaluate_as_pixels(ctx);
+                let cb = scale_pixel_dim(
+                    pad.and_then(|p| p.bottom)
+                        .unwrap_or(config::Dimension::Pixels(0.)),
+                    scale,
+                )
+                .evaluate_as_pixels(ctx);
+
+                // Active tab total height (margin defaults to 0 when fancy_bar is set)
+                let at = fancy.active_tab.as_ref();
+                let active_h = cell_height
+                    + Self::resolve_tab_dim(at, |t| t.margin.as_ref().and_then(|m| m.top), config::Dimension::Cells(0.), ctx, scale)
+                    + Self::resolve_tab_dim(at, |t| t.margin.as_ref().and_then(|m| m.bottom), config::Dimension::Cells(0.), ctx, scale)
+                    + Self::resolve_tab_dim(at, |t| t.padding.as_ref().and_then(|p| p.top), config::Dimension::Cells(0.2), ctx, scale)
+                    + Self::resolve_tab_dim(at, |t| t.padding.as_ref().and_then(|p| p.bottom), config::Dimension::Cells(0.25), ctx, scale)
+                    + Self::resolve_tab_dim(at, |t| t.border.as_ref().and_then(|b| b.top), config::Dimension::Pixels(1.), ctx, scale)
+                    + Self::resolve_tab_dim(at, |t| t.border.as_ref().and_then(|b| b.bottom), config::Dimension::Pixels(1.), ctx, scale);
+
+                // Inactive tab total height
+                let it = fancy.inactive_tab.as_ref();
+                let inactive_h = cell_height
+                    + Self::resolve_tab_dim(it, |t| t.margin.as_ref().and_then(|m| m.top), config::Dimension::Cells(0.), ctx, scale)
+                    + Self::resolve_tab_dim(it, |t| t.margin.as_ref().and_then(|m| m.bottom), config::Dimension::Cells(0.), ctx, scale)
+                    + Self::resolve_tab_dim(it, |t| t.padding.as_ref().and_then(|p| p.top), config::Dimension::Cells(0.2), ctx, scale)
+                    + Self::resolve_tab_dim(it, |t| t.padding.as_ref().and_then(|p| p.bottom), config::Dimension::Cells(0.25), ctx, scale)
+                    + Self::resolve_tab_dim(it, |t| t.border.as_ref().and_then(|b| b.top), config::Dimension::Pixels(1.), ctx, scale)
+                    + Self::resolve_tab_dim(it, |t| t.border.as_ref().and_then(|b| b.bottom), config::Dimension::Pixels(1.), ctx, scale);
+
+                Ok((ct + cb + active_h.max(inactive_h)).ceil())
+            } else {
+                Ok((cell_height * 1.75).ceil())
+            }
         } else {
             Ok(render_metrics.cell_size.height as f32)
         }
     }
 
+    fn resolve_tab_dim(
+        tab: Option<&config::FancyBarTabStyle>,
+        getter: impl Fn(&config::FancyBarTabStyle) -> Option<config::Dimension>,
+        default: config::Dimension,
+        ctx: config::DimensionContext,
+        scale: f32,
+    ) -> f32 {
+        scale_pixel_dim(tab.and_then(&getter).unwrap_or(default), scale)
+            .evaluate_as_pixels(ctx)
+    }
+
     pub fn tab_bar_pixel_height(&self) -> anyhow::Result<f32> {
-        Self::tab_bar_pixel_height_impl(&self.config, &self.fonts, &self.render_metrics)
+        Self::tab_bar_pixel_height_impl(
+            &self.config,
+            &self.fonts,
+            &self.render_metrics,
+            self.dimensions.dpi,
+        )
     }
 }

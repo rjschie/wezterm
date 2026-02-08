@@ -602,7 +602,22 @@ impl FontConfigInner {
         let (sys_font, sys_size) = self.compute_title_font(&config, make_bold);
 
         let (font_size, text_style) = match entity {
-            Entity::Title => (config.window_frame.font_size.unwrap_or(sys_size), None),
+            Entity::Title => {
+                let fancy_font_size = config
+                    .fancy_bar
+                    .as_ref()
+                    .and_then(|f| f.font_size);
+                let fancy_font = config
+                    .fancy_bar
+                    .as_ref()
+                    .and_then(|f| f.font.as_ref());
+                (
+                    fancy_font_size
+                        .or(config.window_frame.font_size)
+                        .unwrap_or(sys_size),
+                    fancy_font,
+                )
+            }
             Entity::CommandPalette => (
                 config.command_palette_font_size,
                 config.command_palette_font.as_ref(),
@@ -663,6 +678,53 @@ impl FontConfigInner {
         let loaded = self.make_entity_font_impl(myself, Entity::Title)?;
 
         title_font.replace(Rc::clone(&loaded));
+
+        Ok(loaded)
+    }
+
+    fn title_font_with_size(
+        &self,
+        myself: &Rc<Self>,
+        font_size: f64,
+    ) -> anyhow::Result<Rc<LoadedFont>> {
+        let config = self.config.borrow();
+        let (sys_font, _sys_size) = self.compute_title_font(&config, true);
+
+        let text_style = config
+            .fancy_bar
+            .as_ref()
+            .and_then(|f| f.font.as_ref())
+            .unwrap_or(config.window_frame.font.as_ref().unwrap_or(&sys_font));
+
+        let dpi = *self.dpi.borrow() as u32;
+        let pixel_size = (font_size * dpi as f64 / 72.0) as u16;
+
+        let attributes = text_style.font_with_fallback();
+        let (handles, _loaded) = self.resolve_font_helper_impl(&attributes, pixel_size)?;
+
+        let shaper = new_shaper(&*config, &handles)?;
+
+        let metrics = shaper.metrics(font_size, dpi).with_context(|| {
+            format!(
+                "obtaining metrics for font_size={} @ dpi {}",
+                font_size, dpi
+            )
+        })?;
+
+        let loaded = Rc::new(LoadedFont {
+            rasterizers: RefCell::new(HashMap::new()),
+            handles: RefCell::new(handles),
+            shaper: RefCell::new(shaper),
+            metrics,
+            font_size,
+            dpi,
+            font_config: Rc::downgrade(myself),
+            pending_fallback: Arc::new(Mutex::new(vec![])),
+            text_style: text_style.clone(),
+            id: alloc_font_id(),
+            tried_glyphs: RefCell::new(HashSet::new()),
+            pixel_geometry: config.display_pixel_geometry,
+        });
 
         Ok(loaded)
     }
@@ -1065,6 +1127,10 @@ impl FontConfiguration {
 
     pub fn title_font(&self) -> anyhow::Result<Rc<LoadedFont>> {
         self.inner.title_font(&self.inner)
+    }
+
+    pub fn title_font_with_size(&self, font_size: f64) -> anyhow::Result<Rc<LoadedFont>> {
+        self.inner.title_font_with_size(&self.inner, font_size)
     }
 
     pub fn command_palette_font(&self) -> anyhow::Result<Rc<LoadedFont>> {

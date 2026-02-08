@@ -34,6 +34,19 @@ impl Default for VerticalAlign {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HorizontalAlign {
+    Left,
+    Center,
+    Right,
+}
+
+impl Default for HorizontalAlign {
+    fn default() -> HorizontalAlign {
+        HorizontalAlign::Left
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayType {
     Block,
     Inline,
@@ -223,6 +236,7 @@ impl From<LinearRgba> for ResolvedColor {
 pub struct Element {
     pub item_type: Option<UIItemType>,
     pub vertical_align: VerticalAlign,
+    pub horizontal_align: HorizontalAlign,
     pub zindex: i8,
     pub display: DisplayType,
     pub float: Float,
@@ -253,6 +267,7 @@ impl Element {
             border: BoxDimension::default(),
             border_corners: None,
             vertical_align: VerticalAlign::default(),
+            horizontal_align: HorizontalAlign::default(),
             colors: ElementColors::default(),
             hover_colors: None,
             font: Rc::clone(font),
@@ -315,6 +330,11 @@ impl Element {
 
     pub fn vertical_align(mut self, align: VerticalAlign) -> Self {
         self.vertical_align = align;
+        self
+    }
+
+    pub fn horizontal_align(mut self, align: HorizontalAlign) -> Self {
+        self.horizontal_align = align;
         self
     }
 
@@ -572,16 +592,18 @@ impl super::TermWindow {
         let border = element.border.to_pixels(context);
         let padding = element.padding.to_pixels(context);
         let baseline = context.height.pixel_cell + context.metrics.descender.get() as f32;
+
+        let border_and_padding_width = border.left + border.right + padding.left + padding.right;
+        let border_and_padding_height = border.top + border.bottom + padding.top + padding.bottom;
+
         let min_width = match element.min_width {
-            Some(w) => w.evaluate_as_pixels(context.width),
+            Some(w) => (w.evaluate_as_pixels(context.width) - border_and_padding_width).max(0.),
             None => 0.0,
         };
         let min_height = match element.min_height {
-            Some(h) => h.evaluate_as_pixels(context.height),
+            Some(h) => (h.evaluate_as_pixels(context.height) - border_and_padding_height).max(0.),
             None => 0.0,
         };
-
-        let border_and_padding_width = border.left + border.right + padding.left + padding.right;
 
         let max_width = match element.max_width {
             Some(w) => {
@@ -749,6 +771,8 @@ impl super::TermWindow {
 
                 let pixel_height = (y_coord + block_pixel_height).max(min_height);
 
+                let content_width = max_x.min(max_width);
+
                 for (kid, child) in computed_kids.iter_mut().zip(kids.iter()) {
                     match child.float {
                         Float::Right => {
@@ -770,6 +794,21 @@ impl super::TermWindow {
                             ));
                         }
                         VerticalAlign::Top => {}
+                    }
+                    match child.horizontal_align {
+                        HorizontalAlign::Center => {
+                            let offset = (content_width - kid.bounds.width()) / 2.0;
+                            if offset > 0. {
+                                kid.translate(euclid::vec2(offset, 0.));
+                            }
+                        }
+                        HorizontalAlign::Right => {
+                            let offset = content_width - kid.bounds.width();
+                            if offset > 0. {
+                                kid.translate(euclid::vec2(offset, 0.));
+                            }
+                        }
+                        HorizontalAlign::Left => {}
                     }
                 }
 
@@ -1035,6 +1074,19 @@ impl super::TermWindow {
             bottom_right_width = c.bottom_right.width;
             bottom_right_height = c.bottom_right.height;
 
+            // Clamp corners to min(half-width, half-height) to prevent over-rounding
+            let half_w = element.border_rect.width() / 2.0;
+            let half_h = element.border_rect.height() / 2.0;
+            let max_radius = half_w.min(half_h).floor();
+            top_left_width = top_left_width.min(max_radius).floor();
+            top_left_height = top_left_height.min(max_radius).floor();
+            top_right_width = top_right_width.min(max_radius).floor();
+            top_right_height = top_right_height.min(max_radius).floor();
+            bottom_left_width = bottom_left_width.min(max_radius).floor();
+            bottom_left_height = bottom_left_height.min(max_radius).floor();
+            bottom_right_width = bottom_right_width.min(max_radius).floor();
+            bottom_right_height = bottom_right_height.min(max_radius).floor();
+
             if top_left_width > 0. && top_left_height > 0. {
                 self.poly_quad(
                     layers,
@@ -1046,6 +1098,24 @@ impl super::TermWindow {
                     colors.border.top,
                 )?
                 .set_grayscale();
+                let iw = top_left_width - element.border.left;
+                let ih = top_left_height - element.border.top;
+                if iw > 0. && ih > 0. {
+                    let mut q = self.poly_quad(
+                        layers,
+                        0,
+                        euclid::point2(
+                            element.border_rect.min_x() + element.border.left,
+                            element.border_rect.min_y() + element.border.top,
+                        ),
+                        c.top_left.poly,
+                        0,
+                        euclid::size2(iw, ih),
+                        LinearRgba::TRANSPARENT,
+                    )?;
+                    self.resolve_bg(colors, inherited_colors).apply(&mut q);
+                    q.set_grayscale();
+                }
             }
             if top_right_width > 0. && top_right_height > 0. {
                 self.poly_quad(
@@ -1061,6 +1131,24 @@ impl super::TermWindow {
                     colors.border.top,
                 )?
                 .set_grayscale();
+                let iw = top_right_width - element.border.right;
+                let ih = top_right_height - element.border.top;
+                if iw > 0. && ih > 0. {
+                    let mut q = self.poly_quad(
+                        layers,
+                        0,
+                        euclid::point2(
+                            element.border_rect.max_x() - top_right_width,
+                            element.border_rect.min_y() + element.border.top,
+                        ),
+                        c.top_right.poly,
+                        0,
+                        euclid::size2(iw, ih),
+                        LinearRgba::TRANSPARENT,
+                    )?;
+                    self.resolve_bg(colors, inherited_colors).apply(&mut q);
+                    q.set_grayscale();
+                }
             }
             if bottom_left_width > 0. && bottom_left_height > 0. {
                 self.poly_quad(
@@ -1076,6 +1164,24 @@ impl super::TermWindow {
                     colors.border.bottom,
                 )?
                 .set_grayscale();
+                let iw = bottom_left_width - element.border.left;
+                let ih = bottom_left_height - element.border.bottom;
+                if iw > 0. && ih > 0. {
+                    let mut q = self.poly_quad(
+                        layers,
+                        0,
+                        euclid::point2(
+                            element.border_rect.min_x() + element.border.left,
+                            element.border_rect.max_y() - bottom_left_height,
+                        ),
+                        c.bottom_left.poly,
+                        0,
+                        euclid::size2(iw, ih),
+                        LinearRgba::TRANSPARENT,
+                    )?;
+                    self.resolve_bg(colors, inherited_colors).apply(&mut q);
+                    q.set_grayscale();
+                }
             }
             if bottom_right_width > 0. && bottom_right_height > 0. {
                 self.poly_quad(
@@ -1091,6 +1197,24 @@ impl super::TermWindow {
                     colors.border.bottom,
                 )?
                 .set_grayscale();
+                let iw = bottom_right_width - element.border.right;
+                let ih = bottom_right_height - element.border.bottom;
+                if iw > 0. && ih > 0. {
+                    let mut q = self.poly_quad(
+                        layers,
+                        0,
+                        euclid::point2(
+                            element.border_rect.max_x() - bottom_right_width,
+                            element.border_rect.max_y() - bottom_right_height,
+                        ),
+                        c.bottom_right.poly,
+                        0,
+                        euclid::size2(iw, ih),
+                        LinearRgba::TRANSPARENT,
+                    )?;
+                    self.resolve_bg(colors, inherited_colors).apply(&mut q);
+                    q.set_grayscale();
+                }
             }
 
             // Filling the background is more complex because we can't

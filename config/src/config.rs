@@ -1,8 +1,7 @@
 use crate::background::{BackgroundLayer, Gradient};
 use crate::bell::{AudibleBell, EasingFunction, VisualBell};
-use crate::color::{
-    ColorSchemeFile, HsbTransform, Palette, SrgbaTuple, TabBarStyle, WindowFrameConfig,
-};
+use crate::color::{ColorSchemeFile, HsbTransform, Palette, SrgbaTuple, WindowFrameConfig};
+use crate::fancy_bar::{FancyBarConfig, TabBarStyle};
 use crate::daemon::DaemonOptions;
 use crate::exec_domain::ExecDomain;
 use crate::font::{
@@ -141,6 +140,9 @@ pub struct Config {
 
     #[dynamic(default)]
     pub window_frame: WindowFrameConfig,
+
+    #[dynamic(default)]
+    pub fancy_bar: Option<FancyBarConfig>,
 
     /// Font to use for CharSelect
     #[dynamic(default)]
