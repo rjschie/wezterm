@@ -1373,3 +1373,111 @@ fn test_hyperlinks() {
         Compare::TEXT | Compare::ATTRS,
     );
 }
+
+#[test]
+fn test_resize_after_clear_screen() {
+    let mut term = TestTerm::new(4, 10, 10);
+    // fill scrollback
+    term.print("1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n11\r\n12\r\n");
+    // simulate CTRL+L: cursor home + erase display
+    term.cup(0, 0);
+    term.erase_in_display(EraseInDisplay::EraseDisplay);
+    term.print("prompt");
+    assert_visible_contents(&term, file!(), line!(), &["prompt    ", "          ", "          ", ""]);
+    // resize smaller — cursor should stay at row 0, no scrollback revealed
+    term.resize(TerminalSize {
+        rows: 3,
+        cols: 10,
+        pixel_width: 0,
+        pixel_height: 0,
+        dpi: 0,
+    });
+    assert_visible_contents(&term, file!(), line!(), &["prompt    ", "          ", "          "]);
+}
+
+#[test]
+fn test_resize_after_clear_screen_multiline_prompt_shrink() {
+    let mut term = TestTerm::new(4, 10, 10);
+    term.print("1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n11\r\n12\r\n");
+    term.cup(0, 0);
+    term.erase_in_display(EraseInDisplay::EraseDisplay);
+    // 2-line prompt: first line then cursor on second line
+    term.print("line1\r\nline2");
+    term.assert_cursor_pos(5, 1, None, None);
+    // shrink 4→3: cursor should stay at row 1
+    term.resize(TerminalSize {
+        rows: 3,
+        cols: 10,
+        pixel_width: 0,
+        pixel_height: 0,
+        dpi: 0,
+    });
+    assert_visible_contents(
+        &term,
+        file!(),
+        line!(),
+        &["line1     ", "line2     ", "          "],
+    );
+    term.assert_cursor_pos(5, 1, None, None);
+}
+
+#[test]
+fn test_resize_after_clear_screen_single_line_grow() {
+    let mut term = TestTerm::new(4, 10, 10);
+    term.print("1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n11\r\n12\r\n");
+    term.cup(0, 0);
+    term.erase_in_display(EraseInDisplay::EraseDisplay);
+    term.print("prompt");
+    // grow 4→6: cursor should stay at row 0
+    term.resize(TerminalSize {
+        rows: 6,
+        cols: 10,
+        pixel_width: 0,
+        pixel_height: 0,
+        dpi: 0,
+    });
+    assert_visible_contents(
+        &term,
+        file!(),
+        line!(),
+        &[
+            "prompt    ",
+            "          ",
+            "          ",
+            "",
+            "",
+            "",
+        ],
+    );
+}
+
+#[test]
+fn test_resize_after_clear_screen_multiline_prompt_grow() {
+    let mut term = TestTerm::new(4, 10, 10);
+    term.print("1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9\r\n10\r\n11\r\n12\r\n");
+    term.cup(0, 0);
+    term.erase_in_display(EraseInDisplay::EraseDisplay);
+    term.print("line1\r\nline2");
+    term.assert_cursor_pos(5, 1, None, None);
+    // grow 4→6: cursor should stay at row 1
+    term.resize(TerminalSize {
+        rows: 6,
+        cols: 10,
+        pixel_width: 0,
+        pixel_height: 0,
+        dpi: 0,
+    });
+    assert_visible_contents(
+        &term,
+        file!(),
+        line!(),
+        &[
+            "line1     ",
+            "line2     ",
+            "          ",
+            "",
+            "",
+            "",
+        ],
+    );
+}
