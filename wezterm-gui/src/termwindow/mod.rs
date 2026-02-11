@@ -3002,6 +3002,16 @@ impl TermWindow {
                 };
                 tab.set_zoomed(*zoomed);
             }
+            EqualizePanes => {
+                let mux = Mux::get();
+                let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+                    Some(tab) => tab,
+                    None => return Ok(PerformAssignmentResult::Handled),
+                };
+                if self.tab_state(tab.tab_id()).overlay.is_none() {
+                    tab.equalize_panes();
+                }
+            }
             SwitchWorkspaceRelative(delta) => {
                 let mux = Mux::get();
                 let workspace = mux.active_workspace();
