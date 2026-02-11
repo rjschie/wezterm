@@ -189,7 +189,15 @@ enum OnlyKeyBindings {
 
 impl super::TermWindow {
     fn encode_win32_input(&self, pane: &Arc<dyn Pane>, key: &KeyEvent) -> Option<String> {
-        if !self.config.allow_win32_input_mode
+        Self::encode_win32_input_static(pane, &self.config, key)
+    }
+
+    fn encode_win32_input_static(
+        pane: &Arc<dyn Pane>,
+        config: &config::Config,
+        key: &KeyEvent,
+    ) -> Option<String> {
+        if !config.allow_win32_input_mode
             || pane.get_keyboard_encoding() != KeyboardEncoding::Win32
         {
             return None;
@@ -198,7 +206,15 @@ impl super::TermWindow {
     }
 
     fn encode_kitty_input(&self, pane: &Arc<dyn Pane>, key: &KeyEvent) -> Option<String> {
-        if !self.config.enable_kitty_keyboard {
+        Self::encode_kitty_input_static(pane, &self.config, key)
+    }
+
+    fn encode_kitty_input_static(
+        pane: &Arc<dyn Pane>,
+        config: &config::Config,
+        key: &KeyEvent,
+    ) -> Option<String> {
+        if !config.enable_kitty_keyboard {
             return None;
         }
         if let KeyboardEncoding::Kitty(flags) = pane.get_keyboard_encoding() {
@@ -416,6 +432,32 @@ impl super::TermWindow {
                         }
                         if !keycode.is_modifier() {
                             context.invalidate();
+                        }
+
+                        if is_down && !keycode.is_modifier() {
+                            if let Some(key_event) = key_event {
+                                self.broadcast_to_other_panes(pane.pane_id(), |other| {
+                                    if let Some(encoded) =
+                                        Self::encode_win32_input_static(
+                                            other, &self.config, key_event,
+                                        )
+                                    {
+                                        other.writer().write_all(encoded.as_bytes()).ok();
+                                    } else if let Some(encoded) =
+                                        Self::encode_kitty_input_static(
+                                            other, &self.config, key_event,
+                                        )
+                                    {
+                                        other.writer().write_all(encoded.as_bytes()).ok();
+                                    } else {
+                                        other.key_down(term_key, tw_raw_modifiers).ok();
+                                    }
+                                });
+                            } else {
+                                self.broadcast_to_other_panes(pane.pane_id(), |other| {
+                                    other.key_down(term_key, tw_raw_modifiers).ok();
+                                });
+                            }
                         }
 
                         return true;
@@ -718,6 +760,21 @@ impl super::TermWindow {
                     if !key.is_modifier() {
                         context.invalidate();
                     }
+                    if window_key.key_is_down && !key.is_modifier() {
+                        self.broadcast_to_other_panes(pane.pane_id(), |other| {
+                            if let Some(encoded) =
+                                Self::encode_win32_input_static(&other, &self.config, &window_key)
+                            {
+                                other.writer().write_all(encoded.as_bytes()).ok();
+                            } else if let Some(encoded) =
+                                Self::encode_kitty_input_static(&other, &self.config, &window_key)
+                            {
+                                other.writer().write_all(encoded.as_bytes()).ok();
+                            } else {
+                                other.key_down(key, modifiers).ok();
+                            }
+                        });
+                    }
                 }
             }
             Key::Composed(s) => {
@@ -736,6 +793,9 @@ impl super::TermWindow {
                     log::info!("send to pane string={:?}", s);
                 }
                 pane.writer().write_all(s.as_bytes()).ok();
+                self.broadcast_to_other_panes(pane.pane_id(), |other| {
+                    other.writer().write_all(s.as_bytes()).ok();
+                });
                 self.maybe_scroll_to_bottom_for_input(&pane);
                 context.invalidate();
             }
@@ -866,4 +926,5 @@ impl super::TermWindow {
         };
         Key::Code(code)
     }
+
 }

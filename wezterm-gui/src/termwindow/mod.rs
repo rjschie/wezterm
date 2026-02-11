@@ -345,6 +345,8 @@ pub struct TabState {
     /// contents, we're overlaying a little internal application
     /// tab.  We'll also route input to it.
     pub overlay: Option<OverlayState>,
+    /// When true, broadcast keyboard input to all panes in the tab
+    pub sync_panes: bool,
 }
 
 /// Manages the state/queue of lua based event handlers.
@@ -2743,7 +2745,12 @@ impl TermWindow {
             ActivateWindowRelativeNoWrap(n) => {
                 self.activate_window_relative(*n, false)?;
             }
-            SendString(s) => pane.writer().write_all(s.as_bytes())?,
+            SendString(s) => {
+                pane.writer().write_all(s.as_bytes())?;
+                self.broadcast_to_other_panes(pane.pane_id(), |other| {
+                    other.writer().write_all(s.as_bytes()).ok();
+                });
+            }
             SendKey(key) => {
                 use keyevent::Key;
                 let mods = key.mods;
@@ -2751,6 +2758,9 @@ impl TermWindow {
                     &key.key.resolve(self.config.key_map_preference),
                 ) {
                     pane.key_down(key, mods)?;
+                    self.broadcast_to_other_panes(pane.pane_id(), |other| {
+                        other.key_down(key, mods).ok();
+                    });
                 }
             }
             Hide => {
@@ -2993,6 +3003,17 @@ impl TermWindow {
                     None => return Ok(PerformAssignmentResult::Handled),
                 };
                 tab.toggle_zoom();
+            }
+            ToggleSynchronizePanes => {
+                let mux = Mux::get();
+                let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+                    Some(tab) => tab,
+                    None => return Ok(PerformAssignmentResult::Handled),
+                };
+                let tab_id = tab.tab_id();
+                let mut state = self.tab_state(tab_id);
+                state.sync_panes = !state.sync_panes;
+                log::info!("ToggleSynchronizePanes: sync_panes={}", state.sync_panes);
             }
             SetPaneZoomState(zoomed) => {
                 let mux = Mux::get();
@@ -3295,6 +3316,32 @@ impl TermWindow {
         RefMut::map(self.tab_state.borrow_mut(), |state| {
             state.entry(tab_id).or_insert_with(TabState::default)
         })
+    }
+
+    pub fn is_sync_panes_active(&self) -> bool {
+        let mux = Mux::get();
+        if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+            self.tab_state(tab.tab_id()).sync_panes
+        } else {
+            false
+        }
+    }
+
+    pub fn broadcast_to_other_panes<F>(&self, active_pane_id: PaneId, f: F)
+    where
+        F: Fn(&Arc<dyn Pane>),
+    {
+        if !self.is_sync_panes_active() {
+            return;
+        }
+        let mux = Mux::get();
+        if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+            for pos in tab.iter_panes() {
+                if pos.pane.pane_id() != active_pane_id {
+                    f(&pos.pane);
+                }
+            }
+        }
     }
 
     /// Resize overlays to match their corresponding tab/pane dimensions

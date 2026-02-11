@@ -88,7 +88,7 @@ impl crate::TermWindow {
 
         let gl_state = self.render_state.as_ref().unwrap();
 
-        let cursor_border_color = palette.cursor_border.to_linear();
+        let cursor_border_color_orig = palette.cursor_border.to_linear();
         let foreground = palette.foreground.to_linear();
         let white_space = gl_state.util_sprites.white_space.texture_coords();
         let filled_box = gl_state.util_sprites.filled_box.texture_coords();
@@ -297,10 +297,27 @@ impl crate::TermWindow {
         let start = Instant::now();
         let selection_fg = palette.selection_fg.to_linear();
         let selection_bg = palette.selection_bg.to_linear();
-        let cursor_fg = palette.cursor_fg.to_linear();
-        let cursor_bg = palette.cursor_bg.to_linear();
-        let cursor_is_default_color =
-            palette.cursor_fg == global_cursor_fg && palette.cursor_bg == global_cursor_bg;
+        let sync_panes_active = self.is_sync_panes_active();
+        let cursor_fg = if sync_panes_active {
+            default_bg
+        } else {
+            palette.cursor_fg.to_linear()
+        };
+        let cursor_bg = if sync_panes_active {
+            LinearRgba(1.0, 1.0, 0.0, 1.0)
+        } else {
+            palette.cursor_bg.to_linear()
+        };
+        let cursor_is_default_color = if sync_panes_active {
+            false
+        } else {
+            palette.cursor_fg == global_cursor_fg && palette.cursor_bg == global_cursor_bg
+        };
+        let cursor_border_color = if sync_panes_active {
+            LinearRgba(1.0, 1.0, 0.0, 1.0)
+        } else {
+            cursor_border_color_orig
+        };
 
         {
             let stable_range = match current_viewport {
@@ -330,6 +347,7 @@ impl crate::TermWindow {
                 cursor_bg: LinearRgba,
                 foreground: LinearRgba,
                 cursor_is_default_color: bool,
+                sync_panes_active: bool,
                 white_space: TextureRect,
                 filled_box: TextureRect,
                 window_is_transparent: bool,
@@ -360,6 +378,7 @@ impl crate::TermWindow {
                 cursor_bg,
                 foreground,
                 cursor_is_default_color,
+                sync_panes_active,
                 white_space,
                 filled_box,
                 window_is_transparent,
@@ -503,13 +522,14 @@ impl crate::TermWindow {
                                 config: &self.term_window.config,
                                 cursor_border_color: self.cursor_border_color,
                                 foreground: self.foreground,
-                                is_active: self.pos.is_active,
+                                is_active: self.pos.is_active || self.sync_panes_active,
                                 pane: Some(&self.pos.pane),
                                 selection_fg: self.selection_fg,
                                 selection_bg: self.selection_bg,
                                 cursor_fg: self.cursor_fg,
                                 cursor_bg: self.cursor_bg,
                                 cursor_is_default_color: self.cursor_is_default_color,
+                                sync_panes_active: self.sync_panes_active,
                                 white_space: self.white_space,
                                 filled_box: self.filled_box,
                                 window_is_transparent: self.window_is_transparent,

@@ -152,6 +152,7 @@ pub struct RenderScreenLineParams<'a> {
     pub cursor_fg: LinearRgba,
     pub cursor_bg: LinearRgba,
     pub cursor_is_default_color: bool,
+    pub sync_panes_active: bool,
 
     pub window_is_transparent: bool,
     pub default_bg: LinearRgba,
@@ -194,6 +195,7 @@ pub struct ComputeCellFgBgParams<'a> {
     pub cursor_is_default_color: bool,
     pub cursor_border_color: LinearRgba,
     pub pane: Option<&'a Arc<dyn Pane>>,
+    pub sync_panes_active: bool,
 }
 
 #[derive(Debug)]
@@ -665,9 +667,9 @@ impl crate::TermWindow {
 
         let blinking = params.cursor.is_some()
             && params.is_active_pane
-            && cursor_shape.is_blinking()
-            && params.config.cursor_blink_rate != 0
-            && self.focused.is_some();
+            && (cursor_shape.is_blinking() || params.sync_panes_active)
+            && (params.config.cursor_blink_rate != 0 || params.sync_panes_active)
+            && (self.focused.is_some() || params.sync_panes_active);
 
         let mut fg_color_alt = fg_color;
         let bg_color_alt = bg_color;
@@ -709,6 +711,10 @@ impl crate::TermWindow {
                 match cursor_shape {
                     CursorShape::BlinkingBlock | CursorShape::SteadyBlock if focused_and_active => {
                         Some(CursorShape::Default)
+                    }
+                    // When sync panes active, use blinking block for unfocused panes
+                    _shape if !focused_and_active && params.sync_panes_active => {
+                        Some(CursorShape::BlinkingBlock)
                     }
                     // When not focused, convert bar to block to make it more visually
                     // distinct from the focused bar in another pane

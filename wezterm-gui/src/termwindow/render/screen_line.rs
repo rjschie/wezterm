@@ -343,6 +343,7 @@ impl crate::TermWindow {
                 cursor_is_default_color: params.cursor_is_default_color,
                 cursor_border_color: params.cursor_border_color,
                 pane: params.pane,
+                sync_panes_active: params.sync_panes_active,
             });
             let pos_x = (self.dimensions.pixel_width as f32 / -2.)
                 + params.left_pixel_x
@@ -622,6 +623,7 @@ impl crate::TermWindow {
                                 cursor_is_default_color: params.cursor_is_default_color,
                                 cursor_border_color: params.cursor_border_color,
                                 pane: params.pane,
+                                sync_panes_active: params.sync_panes_active,
                             });
 
                             if glyph_color == bg_color || cluster.attrs.invisible() {
