@@ -256,6 +256,7 @@ impl GuiFrontEnd {
                             pane_id,
                             workspace,
                             None, // optional position
+                            None, // optional tab_position
                         )
                         .await
                     {

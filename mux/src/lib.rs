@@ -4,7 +4,7 @@ use crate::ssh_agent::AgentProxy;
 use crate::tab::{SplitRequest, Tab, TabId};
 use crate::window::{Window, WindowId};
 use anyhow::{anyhow, Context, Error};
-use config::keyassignment::SpawnTabDomain;
+use config::keyassignment::{SpawnTabDomain, TabPosition};
 use config::{configuration, ExitBehavior, GuiPosition};
 use domain::{Domain, DomainId, DomainState, SplitSource};
 use filedescriptor::{poll, pollfd, socketpair, AsRawSocketDescriptor, FileDescriptor, POLLIN};
@@ -1314,6 +1314,7 @@ impl Mux {
         current_pane_id: Option<PaneId>,
         workspace_for_new_window: String,
         window_position: Option<GuiPosition>,
+        tab_position: Option<TabPosition>,
     ) -> anyhow::Result<(Arc<Tab>, Arc<dyn Pane>, WindowId)> {
         let domain = self
             .resolve_spawn_tab_domain(current_pane_id, &domain)
@@ -1392,7 +1393,22 @@ impl Mux {
             .get_window_mut(window_id)
             .ok_or_else(|| anyhow!("no such window!?"))?;
         if let Some(idx) = window.idx_by_id(tab.tab_id()) {
-            window.save_and_then_set_active(idx);
+            // Reposition the tab if tab_position was specified and this
+            // is an existing window (not a newly created single-tab window)
+            let final_idx = if let Some(ref pos) = tab_position {
+                if window.len() > 1 {
+                    let active_idx = window.get_active_idx();
+                    let tab_arc = window.remove_by_idx(idx);
+                    let target = pos.resolve(active_idx, window.len());
+                    window.insert(target, &tab_arc);
+                    target
+                } else {
+                    idx
+                }
+            } else {
+                idx
+            };
+            window.save_and_then_set_active(final_idx);
         }
 
         Ok((tab, pane, window_id))
