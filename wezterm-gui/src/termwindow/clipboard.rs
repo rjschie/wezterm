@@ -50,6 +50,9 @@ impl TermWindow {
                         })
                     {
                         pane.send_paste(&clip).ok();
+                        myself.broadcast_to_other_panes(pane_id, |other| {
+                            other.send_paste(&clip).ok();
+                        });
                     }
                 })));
             }

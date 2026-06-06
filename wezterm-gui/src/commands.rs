@@ -1598,6 +1598,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Window"],
             icon: Some("md_fullscreen"),
         },
+        ToggleSynchronizePanes => CommandDef {
+            brief: "Toggle Synchronized Panes".into(),
+            doc: "Broadcast keyboard input to all panes in the active tab".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveTab],
+            menubar: &["Window"],
+            icon: None,
+        },
         ActivateLastTab => CommandDef {
             brief: "Activate the last active tab".into(),
             doc: "If there was no prior active tab, has no effect.".into(),

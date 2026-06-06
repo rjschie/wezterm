@@ -598,6 +598,7 @@ pub enum KeyAssignment {
     ActivatePaneByIndex(usize),
     TogglePaneZoomState,
     SetPaneZoomState(bool),
+    ToggleSynchronizePanes,
     CloseCurrentPane {
         confirm: bool,
     },

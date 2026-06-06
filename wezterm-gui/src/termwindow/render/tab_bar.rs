@@ -83,6 +83,7 @@ impl crate::TermWindow {
                 cursor_fg: LinearRgba::default(),
                 cursor_bg: LinearRgba::default(),
                 cursor_is_default_color: true,
+                sync_panes_active: false,
                 white_space,
                 filled_box,
                 window_is_transparent,
