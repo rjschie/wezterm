@@ -102,6 +102,9 @@ async fn show_notif_impl(notif: ToastNotification) -> Result<(), Box<dyn std::er
 
     let mut hints = HashMap::new();
     hints.insert("urgency", Value::U8(2 /* Critical */));
+    if !notif.sound {
+        hints.insert("suppress-sound", Value::Bool(true));
+    }
     let notification = proxy
         .notify(
             "wezterm",

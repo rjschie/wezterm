@@ -8,6 +8,7 @@ pub struct ToastNotification {
     pub message: String,
     pub url: Option<String>,
     pub timeout: Option<std::time::Duration>,
+    pub sound: bool,
 }
 
 impl ToastNotification {
@@ -44,6 +45,7 @@ pub fn persistent_toast_notification_with_click_to_open_url(title: &str, message
         message: message.to_string(),
         url: Some(url.to_string()),
         timeout: None,
+        sound: true,
     });
 }
 
@@ -53,8 +55,16 @@ pub fn persistent_toast_notification(title: &str, message: &str) {
         message: message.to_string(),
         url: None,
         timeout: None,
+        sound: true,
     });
 }
 
 #[cfg(target_os = "macos")]
 pub use macos::initialize as macos_initialize;
+
+#[cfg(target_os = "macos")]
+pub use macos::{
+    dismiss_all as macos_dismiss_all, dismiss_for_pane as macos_dismiss_for_pane,
+    dismiss_for_tab as macos_dismiss_for_tab, dismiss_for_window as macos_dismiss_for_window,
+    set_notification_context as macos_set_notification_context,
+};

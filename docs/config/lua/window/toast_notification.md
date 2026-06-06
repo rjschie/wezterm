@@ -1,4 +1,4 @@
-# `window:toast_notification(title, message,  [url, [timeout_milliseconds]])`
+# `window:toast_notification(title, message, [url, [timeout_milliseconds, [sound]]])`
 
 {{since('20210502-154244-3f7122cb')}}
 
@@ -12,6 +12,10 @@ the notification will remain prominently displayed in milliseconds.  To specify
 a timeout without specifying a url, set the url parameter to `nil`.  The timeout
 you specify may not be respected by the system, particularly in X11/Wayland
 environments, and Windows will always use a fixed, unspecified, duration.
+
+An optional *sound* boolean parameter can be provided; if `true`, the
+notification will play the system default notification sound. Defaults to
+`false`.  To specify sound without specifying a timeout, set timeout to `nil`.
 
 The notification will persist on screen until dismissed or clicked, or until its
 timeout duration elapses.

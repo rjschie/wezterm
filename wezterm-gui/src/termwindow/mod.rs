@@ -36,7 +36,7 @@ use config::keyassignment::{
 use config::window::WindowLevel;
 use config::{
     configuration, AudibleBell, ConfigHandle, Dimension, DimensionContext, FrontEndSelection,
-    GeometryOrigin, GuiPosition, TermConfig, WindowCloseConfirmation,
+    GeometryOrigin, GuiPosition, NotificationHandling, TermConfig, WindowCloseConfirmation,
 };
 use lfucache::*;
 use mlua::{FromLua, LuaSerdeExt, UserData, UserDataFields};
@@ -525,6 +525,10 @@ impl TermWindow {
     fn focus_changed(&mut self, focused: bool, window: &Window) {
         log::trace!("Setting focus to {:?}", focused);
         self.focused = if focused { Some(Instant::now()) } else { None };
+        #[cfg(target_os = "macos")]
+        if focused {
+            wezterm_toast_notification::macos_dismiss_all();
+        }
         self.quad_generation += 1;
         self.load_os_parameters();
 
@@ -547,6 +551,33 @@ impl TermWindow {
 
         if let Some(pane) = self.get_active_pane_or_overlay() {
             pane.focus_changed(focused);
+        }
+
+        // Dismiss notifications on window focus based on config
+        #[cfg(target_os = "macos")]
+        if focused {
+            let mux = Mux::get();
+            match self.config.notification_handling {
+                NotificationHandling::AlwaysShow => {
+                    wezterm_toast_notification::macos_dismiss_all();
+                }
+                NotificationHandling::SuppressFromFocusedWindow => {
+                    wezterm_toast_notification::macos_dismiss_for_window(self.mux_window_id);
+                }
+                NotificationHandling::SuppressFromFocusedTab => {
+                    if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+                        wezterm_toast_notification::macos_dismiss_for_tab(tab.tab_id());
+                    }
+                }
+                NotificationHandling::SuppressFromFocusedPane => {
+                    if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+                        if let Some(pane) = tab.get_active_pane() {
+                            wezterm_toast_notification::macos_dismiss_for_pane(pane.pane_id());
+                        }
+                    }
+                }
+                NotificationHandling::NeverShow => {}
+            }
         }
 
         self.update_title();
@@ -2199,6 +2230,29 @@ impl TermWindow {
 
             if let Some(tab) = self.get_active_pane_or_overlay() {
                 tab.focus_changed(true);
+            }
+
+            // Dismiss notifications for newly-focused tab/pane based on config
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(tab) = mux.get_active_tab_for_window(self.mux_window_id) {
+                    match self.config.notification_handling {
+                        NotificationHandling::AlwaysShow => {
+                            wezterm_toast_notification::macos_dismiss_all();
+                        }
+                        NotificationHandling::SuppressFromFocusedTab => {
+                            wezterm_toast_notification::macos_dismiss_for_tab(tab.tab_id());
+                        }
+                        NotificationHandling::SuppressFromFocusedPane => {
+                            if let Some(pane) = tab.get_active_pane() {
+                                wezterm_toast_notification::macos_dismiss_for_pane(
+                                    pane.pane_id(),
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
             }
 
             self.update_title();
