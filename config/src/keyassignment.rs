@@ -150,6 +150,78 @@ pub enum MouseEventTrigger {
     Up { streak: usize, button: MouseButton },
 }
 
+/// Controls where a new tab is inserted relative to existing tabs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TabPosition {
+    /// Insert at the beginning (index 0)
+    First,
+    /// Insert at the end (default behavior)
+    Last,
+    /// Insert N positions after the current active tab
+    RelativeForward(usize),
+    /// Insert N positions before the current active tab
+    RelativeBackward(usize),
+}
+
+impl TabPosition {
+    /// Resolve to an absolute insertion index given the active tab index
+    /// and the current tab count (after removing the tab to be repositioned).
+    pub fn resolve(&self, active_idx: usize, tab_count: usize) -> usize {
+        match self {
+            TabPosition::First => 0,
+            TabPosition::Last => tab_count,
+            TabPosition::RelativeForward(n) => (active_idx + n).min(tab_count),
+            TabPosition::RelativeBackward(n) => (active_idx + 1).saturating_sub(*n),
+        }
+    }
+}
+
+impl FromDynamic for TabPosition {
+    fn from_dynamic(
+        value: &Value,
+        _options: FromDynamicOptions,
+    ) -> Result<Self, wezterm_dynamic::Error> {
+        match value {
+            Value::String(s) => match s.as_str() {
+                "first" => Ok(TabPosition::First),
+                "last" => Ok(TabPosition::Last),
+                s if s.starts_with('+') => {
+                    let n: usize = s[1..].parse().map_err(|_| {
+                        format!("invalid tab_position '{}': expected +N", s)
+                    })?;
+                    Ok(TabPosition::RelativeForward(n))
+                }
+                s if s.starts_with('-') => {
+                    let n: usize = s[1..].parse().map_err(|_| {
+                        format!("invalid tab_position '{}': expected -N", s)
+                    })?;
+                    Ok(TabPosition::RelativeBackward(n))
+                }
+                _ => Err(format!(
+                    "invalid tab_position '{}': expected 'first', 'last', '+N', or '-N'",
+                    s
+                )
+                .into()),
+            },
+            other => Err(wezterm_dynamic::Error::NoConversion {
+                source_type: other.variant_name().to_string(),
+                dest_type: "TabPosition",
+            }),
+        }
+    }
+}
+
+impl ToDynamic for TabPosition {
+    fn to_dynamic(&self) -> Value {
+        match self {
+            TabPosition::First => Value::String("first".to_string()),
+            TabPosition::Last => Value::String("last".to_string()),
+            TabPosition::RelativeForward(n) => Value::String(format!("+{}", n)),
+            TabPosition::RelativeBackward(n) => Value::String(format!("-{}", n)),
+        }
+    }
+}
+
 /// When spawning a tab, specify which domain should be used to
 /// host/spawn that tab.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, FromDynamic, ToDynamic)]
@@ -198,6 +270,9 @@ pub struct SpawnCommand {
     pub domain: SpawnTabDomain,
 
     pub position: Option<crate::GuiPosition>,
+
+    /// Controls where the new tab is inserted.
+    pub tab_position: Option<TabPosition>,
 }
 impl_lua_conversion_dynamic!(SpawnCommand);
 
@@ -262,6 +337,7 @@ impl SpawnCommand {
             set_environment_variables,
             cwd,
             position: None,
+            tab_position: None,
         })
     }
 }

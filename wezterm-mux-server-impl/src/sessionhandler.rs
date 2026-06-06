@@ -1083,6 +1083,7 @@ async fn domain_spawn_v2(spawn: SpawnV2, client_id: Option<Arc<ClientId>>) -> an
             None, // optional current pane_id
             spawn.workspace,
             None, // optional gui window position
+            None, // optional tab_position
         )
         .await?;
 
