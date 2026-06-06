@@ -216,9 +216,29 @@ impl Screen {
         // this avoids growing the scrollback size when rapidly switching between normal and
         // maximized states.
         let cursor_phys = self.phys_row(cursor.y);
+        let min_lines = cursor_phys
+            .saturating_sub(cursor.y.max(0) as usize)
+            + physical_rows;
         for _ in cursor_phys + 1..self.lines.len() {
+            if self.lines.len() <= min_lines {
+                break;
+            }
             if self.lines.back().map(Line::is_whitespace).unwrap_or(false) {
                 self.lines.pop_back();
+            }
+        }
+
+        // When growing with trailing blank lines (post-clear state), pad to
+        // min_lines so cursor position is preserved instead of drifting down.
+        let has_trailing_blanks = self
+            .lines
+            .back()
+            .map(Line::is_whitespace)
+            .unwrap_or(false)
+            && cursor_phys + 1 < self.lines.len();
+        if has_trailing_blanks && self.lines.len() < min_lines {
+            while self.lines.len() < min_lines {
+                self.lines.push_back(Line::new(seqno));
             }
         }
 
