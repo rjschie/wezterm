@@ -395,6 +395,19 @@ impl super::TermWindow {
             self.window_state -= WindowState::MAXIMIZED;
         }
 
+        // On macOS, a clamshell sleep/wake (or any display add/remove) makes
+        // AppKit restore the correct pre-sleep window frame on wake. If we treat
+        // the accompanying DPI change as a simple one and preserve the terminal
+        // grid, we reapply a grid captured against the transient phantom display
+        // and shrink the window, clobbering AppKit's correct restore. While the
+        // display topology is in flux, don't preserve the grid; adopt the frame
+        // AppKit restored instead. (Outside a reconfiguration the two only
+        // differ when the frame actually changed, so this is a no-op there.)
+        // See window::os::macos::is_display_reconfiguring.
+        #[cfg(target_os = "macos")]
+        let simple_dpi_change =
+            simple_dpi_change && !::window::os::macos::is_display_reconfiguring();
+
         let dpi_changed = dimensions.dpi != self.dimensions.dpi;
         let font_scale_changed = font_scale != self.fonts.get_font_scale();
         let scale_changed = dpi_changed || font_scale_changed;
