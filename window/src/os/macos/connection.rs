@@ -16,8 +16,11 @@ use objc::*;
 use serde::Deserialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::rc::Rc;
 use std::sync::atomic::AtomicUsize;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 pub struct Connection {
     ns_app: id,
@@ -38,6 +41,13 @@ impl Connection {
 
             let delegate = create_app_delegate();
             let () = msg_send![ns_app, setDelegate: delegate];
+
+            // Track display topology reconfiguration so the resize logic can
+            // avoid clobbering AppKit's restored frame on clamshell sleep/wake.
+            // See `is_display_reconfiguring`.
+            let err =
+                CGDisplayRegisterReconfigurationCallback(reconfig_callback, std::ptr::null_mut());
+            log::debug!("registered display reconfiguration callback (err={err})");
 
             let conn = Self {
                 ns_app,
@@ -79,6 +89,62 @@ impl Connection {
         .detach();
 
         future
+    }
+}
+
+type CGDirectDisplayID = u32;
+type CGDisplayChangeSummaryFlags = u32;
+type CGError = i32;
+
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGDisplayRegisterReconfigurationCallback(
+        callback: extern "C" fn(CGDirectDisplayID, CGDisplayChangeSummaryFlags, *mut c_void),
+        user_info: *mut c_void,
+    ) -> CGError;
+}
+
+/// How long after a display reconfiguration callback we keep treating the
+/// display topology as "in flux". macOS delivers the wake `Resized` event in the
+/// middle of a reconfiguration burst — the leading `Begin` flag fires ~30ms
+/// before it, while the `Add`/`Enabled` flags arrive ~15ms after — so we arm
+/// this window on *any* callback (catching `Begin`) and hold it open long enough
+/// to span the whole burst. An overlong window is harmless; see
+/// `is_display_reconfiguring`.
+const RECONFIG_WINDOW: Duration = Duration::from_millis(1000);
+
+/// Deadline until which a display reconfiguration is considered in progress.
+/// Written by the CoreGraphics reconfiguration callback and read by
+/// `wezterm-gui`'s resize logic. `Mutex<Option<Instant>>` keeps the `Instant`
+/// native and the static a one-liner (`Mutex::new` is const); the lock is
+/// uncontended (written only during a reconfiguration, read only on resize).
+static DISPLAY_RECONFIG_DEADLINE: Mutex<Option<Instant>> = Mutex::new(None);
+
+extern "C" fn reconfig_callback(
+    _display: CGDirectDisplayID,
+    _flags: CGDisplayChangeSummaryFlags,
+    _user_info: *mut c_void,
+) {
+    // Arm on every callback, including the leading `Begin` flag — the earliest
+    // marker, and the only one that fires before the decisive wake `Resized`.
+    *DISPLAY_RECONFIG_DEADLINE.lock().unwrap() = Some(Instant::now() + RECONFIG_WINDOW);
+}
+
+/// Returns true while a display topology reconfiguration (monitor add/remove,
+/// mode/resolution change, or sleep/wake teardown) is in flux.
+///
+/// `wezterm-gui` consults this on a DPI-change resize to decide whether to
+/// preserve the existing terminal grid (the normal Retina-style behavior) or to
+/// adopt the frame AppKit just restored. During a reconfiguration the grid must
+/// NOT be preserved: on clamshell wake, AppKit restores the correct pre-sleep
+/// frame, and reapplying a grid captured against the transient phantom display
+/// would shrink the window, clobbering that restore. Outside a reconfiguration
+/// the two behaviors only differ when the frame actually changed, so a slightly
+/// overlong window is harmless.
+pub fn is_display_reconfiguring() -> bool {
+    match *DISPLAY_RECONFIG_DEADLINE.lock().unwrap() {
+        Some(deadline) => Instant::now() < deadline,
+        None => false,
     }
 }
 
