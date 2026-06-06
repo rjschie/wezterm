@@ -270,6 +270,12 @@ pub struct Config {
     #[dynamic(default = "default_initial_cols", validate = "validate_row_or_col")]
     pub initial_cols: u16,
 
+    #[dynamic(default)]
+    pub remember_window_position: bool,
+
+    #[dynamic(default)]
+    pub remember_window_state: bool,
+
     #[dynamic(default = "default_hyperlink_rules")]
     pub hyperlink_rules: Vec<hyperlink::Rule>,
 

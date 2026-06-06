@@ -330,10 +330,16 @@ impl WindowInner {
         if !same {
             self.set_ime_window_position(Rect::default());
 
+            let window_position = Some(client_to_screen(
+                self.hwnd.0,
+                Point::new(0, 0),
+            ));
+
             self.events.dispatch(WindowEvent::Resized {
                 dimensions: current_dims,
                 window_state: get_window_state(self.hwnd.0),
                 live_resizing: self.in_size_move,
+                window_position,
             });
         }
 

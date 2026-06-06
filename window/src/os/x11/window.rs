@@ -259,6 +259,7 @@ impl XWindowInner {
                 },
                 window_state: self.last_wm_state,
                 live_resizing: false,
+                window_position: None,
             });
         }
     }
@@ -387,6 +388,7 @@ impl XWindowInner {
                             },
                             window_state,
                             live_resizing: false,
+                            window_position: None,
                         });
                     }
                 }
@@ -485,15 +487,20 @@ impl XWindowInner {
 
         let mut dpi = conn.default_dpi();
 
+        let coords = conn
+            .send_and_wait_request(&xcb::x::TranslateCoordinates {
+                src_window: self.window_id,
+                dst_window: conn.root,
+                src_x: 0,
+                src_y: 0,
+            })
+            .context("querying window coordinates")?;
+        let window_position = Some(ScreenPoint::new(
+            coords.dst_x() as isize,
+            coords.dst_y() as isize,
+        ));
+
         if !self.config.dpi_by_screen.is_empty() {
-            let coords = conn
-                .send_and_wait_request(&xcb::x::TranslateCoordinates {
-                    src_window: self.window_id,
-                    dst_window: conn.root,
-                    src_x: 0,
-                    src_y: 0,
-                })
-                .context("querying window coordinates")?;
             let screens = conn.get_cached_screens()?;
             let window_rect: ScreenRect = euclid::rect(
                 coords.dst_x().into(),
@@ -522,12 +529,22 @@ impl XWindowInner {
         }
 
         if width == self.width && height == self.height && dpi == self.dpi {
-            // Effectively unchanged; perhaps it was simply moved?
-            // Do nothing!
+            // Size unchanged; dispatch move-only Resized with updated position
             log::trace!(
-                "Ignoring {source} ({width}x{height} dpi={dpi}) \
-                                 because width,height,dpi are unchanged",
+                "{source} ({width}x{height} dpi={dpi}): \
+                                 size unchanged, dispatching position update",
             );
+            self.last_wm_state = self.get_window_state().unwrap_or(WindowState::default());
+            self.queue_pending(WindowEvent::Resized {
+                dimensions: Dimensions {
+                    pixel_width: self.width as usize,
+                    pixel_height: self.height as usize,
+                    dpi: self.dpi as usize,
+                },
+                window_state: self.last_wm_state,
+                live_resizing: false,
+                window_position,
+            });
             return Ok(());
         }
 
@@ -560,6 +577,7 @@ impl XWindowInner {
             // Assume that we're live resizing: we don't know for sure,
             // but it seems like a reasonable assumption
             live_resizing: true,
+            window_position,
         });
         Ok(())
     }

@@ -72,6 +72,7 @@ pub mod background;
 pub mod box_model;
 pub mod charselect;
 pub mod clipboard;
+pub mod state;
 pub mod keyevent;
 pub mod modal;
 mod mouseevent;
@@ -375,6 +376,7 @@ pub struct TermWindow {
     /// Window dimensions and dpi
     pub dimensions: Dimensions,
     pub window_state: WindowState,
+    pub last_window_position: Option<ScreenPoint>,
     pub resizes_pending: usize,
     is_repaint_pending: bool,
     pending_scale_changes: LinkedList<resize::ScaleChange>,
@@ -484,7 +486,7 @@ impl TermWindow {
         let mux = Mux::get();
         match self.config.window_close_confirmation {
             WindowCloseConfirmation::NeverPrompt => {
-                // Immediately kill the tabs and allow the window to close
+                state::save_all_windows_state();
                 mux.kill_window(self.mux_window_id);
                 window.close();
                 front_end().forget_known_window(window);
@@ -493,6 +495,7 @@ impl TermWindow {
                 let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
                     Some(tab) => tab,
                     None => {
+                        state::save_all_windows_state();
                         mux.kill_window(self.mux_window_id);
                         window.close();
                         front_end().forget_known_window(window);
@@ -506,11 +509,13 @@ impl TermWindow {
                     .get_window(mux_window_id)
                     .map_or(false, |w| w.can_close_without_prompting());
                 if can_close {
+                    state::save_all_windows_state();
                     mux.kill_window(self.mux_window_id);
                     window.close();
                     front_end().forget_known_window(window);
                     return;
                 }
+
                 let window = self.window.clone().unwrap();
                 let (overlay, future) = start_overlay(self, &tab, move |tab_id, term| {
                     confirm_close_window(term, mux_window_id, window, tab_id)
@@ -733,6 +738,7 @@ impl TermWindow {
             render_metrics,
             dimensions,
             window_state: WindowState::default(),
+            last_window_position: None,
             resizes_pending: 0,
             is_repaint_pending: false,
             pending_scale_changes: LinkedList::new(),
@@ -823,6 +829,8 @@ impl TermWindow {
             opengl_info: None,
         };
 
+        state::register_window_geometry(mux_window_id, dimensions, None);
+
         let tw = Rc::new(RefCell::new(myself));
         let tw_event = Rc::clone(&tw);
 
@@ -830,14 +838,54 @@ impl TermWindow {
         let mut y = None;
         let mut origin = GeometryOrigin::default();
 
-        if let Some(position) = mux
+        let explicit_position = mux
             .get_window(mux_window_id)
             .and_then(|window| window.get_initial_position().clone())
-            .or_else(|| POSITION.lock().unwrap().take())
-        {
+            .or_else(|| POSITION.lock().unwrap().take());
+
+        // Track saved position to apply after window creation via
+        // set_window_position, which correctly handles coordinate
+        // systems per-platform without double-scaling issues.
+        let mut saved_screen_position: Option<ScreenPoint> = None;
+
+        if let Some(position) = explicit_position {
             x.replace(position.x);
             y.replace(position.y);
             origin = position.origin;
+        } else if config.remember_window_position {
+            if let Some(state) = state::load_state() {
+                if let Some(saved) = state.windows.first() {
+                    let geo = &saved.geometry;
+                    if let (Some(x_pct), Some(y_pct)) = (geo.x_percent, geo.y_percent) {
+                        if let Some(screens) = Connection::get()
+                            .and_then(|conn| conn.screens().ok())
+                        {
+                            let r = screens.virtual_rect;
+                            let sx = (x_pct / 100.0 * r.width() as f64 + r.min_x() as f64) as isize;
+                            let sy = (y_pct / 100.0 * r.height() as f64 + r.min_y() as f64) as isize;
+                            let margin = 100;
+                            let on_screen = sx >= r.min_x() - margin
+                                && sx <= r.max_x() + margin
+                                && sy >= r.min_y() - margin
+                                && sy <= r.max_y() + margin;
+                            if on_screen {
+                                saved_screen_position =
+                                    Some(ScreenPoint::new(sx, sy));
+                            }
+                        }
+                    }
+                    if let (Some(sw), Some(sh)) = (geo.width, geo.height) {
+                        if sw > 0 && sh > 0 {
+                            let current_dpi = dimensions.dpi.max(1) as f64;
+                            let base_dpi = ::window::DEFAULT_DPI;
+                            dimensions.pixel_width =
+                                (sw as f64 * current_dpi / base_dpi) as usize;
+                            dimensions.pixel_height =
+                                (sh as f64 * current_dpi / base_dpi) as usize;
+                        }
+                    }
+                }
+            }
         }
 
         let geometry = RequestedWindowGeometry {
@@ -864,6 +912,10 @@ impl TermWindow {
         )
         .await?;
         tw.borrow_mut().window.replace(window.clone());
+
+        if let Some(pos) = saved_screen_position {
+            window.set_window_position(pos);
+        }
 
         Self::apply_icon(&window)?;
 
@@ -987,8 +1039,18 @@ impl TermWindow {
                 dimensions,
                 window_state,
                 live_resizing,
+                window_position,
             } => {
                 self.resize(dimensions, window_state, window, live_resizing);
+                if let Some(pos) = window_position {
+                    self.last_window_position = Some(pos);
+                }
+                state::register_window_geometry(
+                    self.mux_window_id,
+                    self.dimensions,
+                    self.last_window_position,
+                );
+
                 Ok(true)
             }
             WindowEvent::SetInnerSizeCompleted => {
@@ -2860,10 +2922,10 @@ impl TermWindow {
             QuitApplication => {
                 let mux = Mux::get();
                 let config = &self.config;
-                log::info!("QuitApplication over here (window)");
 
                 match config.window_close_confirmation {
                     WindowCloseConfirmation::NeverPrompt => {
+                        state::save_all_windows_state();
                         let con = Connection::get().expect("call on gui thread");
                         con.terminate_message_loop();
                     }
@@ -3720,6 +3782,7 @@ impl TermWindow {
 
 impl Drop for TermWindow {
     fn drop(&mut self) {
+        state::unregister_window_geometry(self.mux_window_id);
         self.clear_all_overlays();
         if let Some(window) = self.window.take() {
             if let Some(fe) = try_front_end() {
