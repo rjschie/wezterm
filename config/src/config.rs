@@ -759,6 +759,9 @@ pub struct Config {
     #[dynamic(default)]
     pub macos_fullscreen_extend_behind_notch: bool,
 
+    #[dynamic(default)]
+    pub macos_hide_from_tasks: bool,
+
     #[dynamic(default = "default_word_boundary")]
     pub selection_word_boundary: String,
 

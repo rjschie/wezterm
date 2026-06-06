@@ -8,7 +8,7 @@ use crate::os::macos::app::create_app_delegate;
 use crate::screen::{ScreenInfo, Screens};
 use crate::spawn::*;
 use crate::Appearance;
-use cocoa::appkit::{NSApp, NSApplication, NSApplicationActivationPolicyRegular, NSScreen};
+use cocoa::appkit::{NSApp, NSApplication, NSApplicationActivationPolicyAccessory, NSApplicationActivationPolicyRegular, NSScreen};
 use cocoa::base::{id, nil};
 use cocoa::foundation::{NSArray, NSInteger};
 use objc::runtime::{Object, BOOL, YES};
@@ -36,8 +36,15 @@ impl Connection {
         SPAWN_QUEUE.run();
 
         unsafe {
+            let config = config::configuration();
+            let activationPolicy = if config.macos_hide_from_tasks {
+                NSApplicationActivationPolicyAccessory
+            } else {
+                NSApplicationActivationPolicyRegular
+            };
+
             let ns_app = NSApp();
-            ns_app.setActivationPolicy_(NSApplicationActivationPolicyRegular);
+            ns_app.setActivationPolicy_(activationPolicy);
 
             let delegate = create_app_delegate();
             let () = msg_send![ns_app, setDelegate: delegate];
