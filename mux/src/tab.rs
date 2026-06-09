@@ -478,6 +478,106 @@ fn adjust_y_size(tree: &mut Tree, mut y_adjust: isize, cell_dimensions: &Termina
     }
 }
 
+/// Count leaf-level slots visible through consecutive same-direction splits.
+/// A subtree with a different split direction counts as 1 slot.
+fn count_same_dir_slots(tree: &Tree, direction: SplitDirection) -> usize {
+    match tree {
+        Tree::Empty => 0,
+        Tree::Leaf(_) => 1,
+        Tree::Node { data: None, .. } => 0,
+        Tree::Node {
+            data: Some(data),
+            left,
+            right,
+        } => {
+            if data.direction == direction {
+                count_same_dir_slots(left, direction) + count_same_dir_slots(right, direction)
+            } else {
+                1
+            }
+        }
+    }
+}
+
+fn equalize_tree(tree: &mut Tree, size: &TerminalSize, cell_dims: &TerminalSize) {
+    match tree {
+        Tree::Empty => {}
+        Tree::Node { data: None, .. } => {}
+        Tree::Node {
+            left,
+            right,
+            data: Some(data),
+        } => {
+            let dir = data.direction;
+            let left_slots = count_same_dir_slots(left, dir);
+            let right_slots = count_same_dir_slots(right, dir);
+            let total_slots = left_slots + right_slots;
+            if total_slots == 0 {
+                return;
+            }
+
+            // Internal same-direction dividers within each subtree
+            let left_dividers = left_slots.saturating_sub(1);
+            let right_dividers = right_slots.saturating_sub(1);
+
+            match dir {
+                SplitDirection::Horizontal => {
+                    let available = size.cols.saturating_sub(1); // this node's divider
+                    let content = available.saturating_sub(left_dividers + right_dividers);
+                    let left_content = content * left_slots / total_slots;
+                    let right_content = content - left_content;
+                    let first_cols = left_content + left_dividers;
+                    let second_cols = right_content + right_dividers;
+
+                    data.first = TerminalSize {
+                        rows: size.rows,
+                        cols: first_cols,
+                        pixel_width: first_cols.saturating_mul(cell_dims.pixel_width),
+                        pixel_height: size.pixel_height,
+                        dpi: size.dpi,
+                    };
+                    data.second = TerminalSize {
+                        rows: size.rows,
+                        cols: second_cols,
+                        pixel_width: second_cols.saturating_mul(cell_dims.pixel_width),
+                        pixel_height: size.pixel_height,
+                        dpi: size.dpi,
+                    };
+                }
+                SplitDirection::Vertical => {
+                    let available = size.rows.saturating_sub(1); // this node's divider
+                    let content = available.saturating_sub(left_dividers + right_dividers);
+                    let left_content = content * left_slots / total_slots;
+                    let right_content = content - left_content;
+                    let first_rows = left_content + left_dividers;
+                    let second_rows = right_content + right_dividers;
+
+                    data.first = TerminalSize {
+                        rows: first_rows,
+                        cols: size.cols,
+                        pixel_width: size.pixel_width,
+                        pixel_height: first_rows.saturating_mul(cell_dims.pixel_height),
+                        dpi: size.dpi,
+                    };
+                    data.second = TerminalSize {
+                        rows: second_rows,
+                        cols: size.cols,
+                        pixel_width: size.pixel_width,
+                        pixel_height: second_rows.saturating_mul(cell_dims.pixel_height),
+                        dpi: size.dpi,
+                    };
+                }
+            }
+
+            equalize_tree(&mut *left, &data.first, cell_dims);
+            equalize_tree(&mut *right, &data.second, cell_dims);
+        }
+        Tree::Leaf(pane) => {
+            pane.resize(*size).ok();
+        }
+    }
+}
+
 fn apply_sizes_from_splits(tree: &Tree, size: &TerminalSize) {
     match tree {
         Tree::Empty => return,
@@ -579,6 +679,10 @@ impl Tab {
 
     pub fn iter_panes_ignoring_zoom(&self) -> Vec<PositionedPane> {
         self.inner.lock().iter_panes_ignoring_zoom()
+    }
+
+    pub fn equalize_panes(&self) {
+        self.inner.lock().equalize_panes()
     }
 
     pub fn rotate_counter_clockwise(&self) {
@@ -1434,6 +1538,17 @@ impl TabInner {
                 }
             }
         }
+    }
+
+    fn equalize_panes(&mut self) {
+        if self.zoomed.is_some() {
+            return;
+        }
+        if let Some(tree) = self.pane.as_mut() {
+            let cell_dims = cell_dimensions(&self.size);
+            equalize_tree(tree, &self.size, &cell_dims);
+        }
+        Mux::try_get().map(|mux| mux.notify(MuxNotification::TabResized(self.id)));
     }
 
     fn activate_pane_direction(&mut self, direction: PaneDirection) {
@@ -2515,6 +2630,163 @@ mod test {
         assert_eq!(24, panes[2].height);
         assert_eq!(400, panes[2].pixel_width);
         assert_eq!(600, panes[2].pixel_height);
+    }
+
+    #[test]
+    fn equalize_panes() {
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        };
+
+        let tab = Tab::new(&size);
+        tab.assign_pane(&FakePane::new(1, size));
+
+        // Horizontal split: pane 1 (left), pane 2 (right)
+        let horz_size = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Horizontal,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        tab.split_and_insert(
+            0,
+            SplitRequest {
+                direction: SplitDirection::Horizontal,
+                ..Default::default()
+            },
+            FakePane::new(2, horz_size.second),
+        )
+        .unwrap();
+
+        // Vertical split on left pane: pane 1 (top-left), pane 3 (bottom-left)
+        let vert_size = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Vertical,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        tab.split_and_insert(
+            0,
+            SplitRequest {
+                direction: SplitDirection::Vertical,
+                target_is_second: true,
+                top_level: false,
+                size: Default::default(),
+            },
+            FakePane::new(3, vert_size.second),
+        )
+        .unwrap();
+
+        // Skew sizes
+        tab.resize_split_by(1, 5);
+        tab.resize_split_by(0, 5);
+
+        // Equalize
+        tab.equalize_panes();
+
+        let panes = tab.iter_panes();
+        assert_eq!(3, panes.len());
+
+        // H/V boundary: 50/50 at the horizontal split
+        // Available cols = 80 - 1 = 79, left gets 39, right gets 40
+        assert_eq!(39, panes[0].width);
+        assert_eq!(39, panes[1].width);
+        assert_eq!(40, panes[2].width);
+
+        // Vertical split within left: equal rows
+        // Available rows = 24 - 1 = 23, first = 11, second = 12
+        assert_eq!(11, panes[0].height);
+        assert_eq!(12, panes[1].height);
+
+        // Right pane gets full height
+        assert_eq!(24, panes[2].height);
+    }
+
+    #[test]
+    fn equalize_panes_same_direction_chain() {
+        // Tree: Split(H) -> [Leaf1, Split(H) -> [Leaf2, Leaf3]]
+        // All same direction — should equalize as 3 siblings (~33% each)
+        let size = TerminalSize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 800,
+            pixel_height: 600,
+            dpi: 96,
+        };
+
+        let tab = Tab::new(&size);
+        tab.assign_pane(&FakePane::new(1, size));
+
+        // First H split: pane 1 (left), pane 2 (right)
+        let horz_size = tab
+            .compute_split_size(
+                0,
+                SplitRequest {
+                    direction: SplitDirection::Horizontal,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        tab.split_and_insert(
+            0,
+            SplitRequest {
+                direction: SplitDirection::Horizontal,
+                ..Default::default()
+            },
+            FakePane::new(2, horz_size.second),
+        )
+        .unwrap();
+
+        // Second H split on right pane: pane 2, pane 3
+        let horz_size2 = tab
+            .compute_split_size(
+                1,
+                SplitRequest {
+                    direction: SplitDirection::Horizontal,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        tab.split_and_insert(
+            1,
+            SplitRequest {
+                direction: SplitDirection::Horizontal,
+                ..Default::default()
+            },
+            FakePane::new(3, horz_size2.second),
+        )
+        .unwrap();
+
+        // Skew sizes
+        tab.resize_split_by(0, 10);
+
+        // Equalize
+        tab.equalize_panes();
+
+        let panes = tab.iter_panes();
+        assert_eq!(3, panes.len());
+
+        // 3 H-chain slots: available content = 80 - 3 dividers... no:
+        // 2 split nodes = 2 dividers, content = 80 - 2 = 78
+        // Each slot: 78/3 = 26
+        assert_eq!(26, panes[0].width);
+        assert_eq!(26, panes[1].width);
+        assert_eq!(26, panes[2].width);
+
+        // All get full height
+        assert_eq!(24, panes[0].height);
+        assert_eq!(24, panes[1].height);
+        assert_eq!(24, panes[2].height);
     }
 
     fn is_send_and_sync<T: Send + Sync>() -> bool {

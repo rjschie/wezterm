@@ -1614,6 +1614,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Window", "Select Tab"],
             icon: None,
         },
+        EqualizePanes => CommandDef {
+            brief: "Equalize Pane Sizes".into(),
+            doc: "Distributes space equally among all panes in the tab".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Window"],
+            icon: None,
+        },
         ClearKeyTableStack => CommandDef {
             brief: "Clear the key table stack".into(),
             doc: "Removes all entries from the stack".into(),
@@ -2141,6 +2149,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ActivatePaneDirection(PaneDirection::Up),
         ActivatePaneDirection(PaneDirection::Down),
         TogglePaneZoomState,
+        EqualizePanes,
         ActivateLastTab,
         ShowLauncher,
         ShowTabNavigator,

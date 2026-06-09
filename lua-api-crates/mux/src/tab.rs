@@ -117,6 +117,13 @@ impl UserData for MuxTab {
             Ok(())
         });
 
+        methods.add_method("equalize_panes", |_, this, _: ()| {
+            let mux = get_mux()?;
+            let tab = this.resolve(&mux)?;
+            tab.equalize_panes();
+            Ok(())
+        });
+
         methods.add_method("rotate_clockwise", |_, this, _: ()| {
             let mux = get_mux()?;
             let tab = this.resolve(&mux)?;
